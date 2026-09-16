@@ -1,0 +1,9 @@
+services:
+  chatbot:
+    build: .
+    container_name: hit-workers-ai-chatbot
+    ports:
+      - "3300:3000"
+    volumes:
+      - ./app.env:/app/app.env:ro
+    restart: unless-stopped
