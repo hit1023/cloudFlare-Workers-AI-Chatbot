@@ -56,6 +56,7 @@ CLOUDFLARE_ACCOUNT_ID=your-account-id
 CLOUDFLARE_API_TOKEN=your-api-token
 MODEL=@cf/meta/llama-3.1-8b-instruct   # UIのデフォルト選択モデル
 SYSTEM_PROMPT=あなたは親切で簡潔に答えるアシスタントです。
+MAX_TOKENS=1024   # 応答の最大トークン数。Cloudflare側のデフォルト(256)だと長い応答が途中で切れるため明示的に指定
 ```
 
 > なぜファイル名が `.env` ではなく `app.env` なのか: Docker Composeはプロジェクト直下の `.env` という名前のファイルを、`docker-compose.yml` 側で参照していなくても自動的に読み込み、`docker-compose.yml` 内の変数展開対象にしてしまう。トークンなどの値に `$` が含まれていると誤って変数参照と解釈され値が壊れることがあるため、あえて別名にして `dotenv` で明示的に読み込んでいる。

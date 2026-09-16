@@ -19,6 +19,7 @@ const {
   CLOUDFLARE_API_TOKEN,
   MODEL = "@cf/meta/llama-3.1-8b-instruct",
   SYSTEM_PROMPT = "あなたは親切で簡潔に答えるアシスタントです。",
+  MAX_TOKENS = "1024",
   PORT = 3000,
 } = process.env;
 
@@ -97,6 +98,7 @@ app.post("/api/chat", async (req, res) => {
       },
       body: JSON.stringify({
         messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
+        max_tokens: Number(MAX_TOKENS),
       }),
     });
 
