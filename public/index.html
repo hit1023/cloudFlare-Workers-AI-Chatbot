@@ -270,6 +270,9 @@
   });
 
   input.addEventListener("keydown", (e) => {
+    // 日本語入力の変換確定Enterで誤送信しないよう、IME変換中は無視する
+    // (Safari等はisComposingがfalseのままkeyCode 229で来ることがあるため両方チェック)
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       form.requestSubmit();
