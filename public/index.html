@@ -209,11 +209,11 @@
       }
 
       modelSelect.innerHTML = "";
-      for (const id of data.models) {
+      for (const m of data.models) {
         const opt = document.createElement("option");
-        opt.value = id;
-        opt.textContent = id;
-        if (id === data.default) opt.selected = true;
+        opt.value = m.id;
+        opt.textContent = m.id + (m.requiresPaid ? "（要Paidプラン）" : "");
+        if (m.id === data.default) opt.selected = true;
         modelSelect.appendChild(opt);
       }
       modelSelect.disabled = false;

@@ -45,9 +45,12 @@ async function fetchTextGenerationModels() {
   }
 
   const list = (data.result || [])
-    .map((m) => m.name)
-    .filter((name) => name && !name.includes("-lora") && !name.includes("guard"))
-    .sort();
+    .filter((m) => m.name && !m.name.includes("-lora") && !m.name.includes("guard"))
+    .map((m) => ({
+      id: m.name,
+      requiresPaid: m.properties?.some((p) => p.property_id === "require_workers_paid" && p.value === "true") ?? false,
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
 
   modelsCache = { list, fetchedAt: Date.now() };
   return list;
@@ -101,7 +104,10 @@ app.post("/api/chat", async (req, res) => {
 
     if (!cfRes.ok || data.success === false) {
       const detail = data.errors?.map((e) => e.message).join(", ") || cfRes.statusText;
-      return res.status(cfRes.status || 502).json({ error: `Workers AI エラー: ${detail}` });
+      const message = detail.includes("Workers Free plan")
+        ? `${useModel} はWorkers Paidプラン限定のモデルです。Freeプランでは利用できません。`
+        : `Workers AI エラー: ${detail}`;
+      return res.status(cfRes.status || 502).json({ error: message });
     }
 
     // モデルによって legacy 形式(result.response)とOpenAI互換形式(result.choices[].message.content)が混在する
