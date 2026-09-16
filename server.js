@@ -3,6 +3,7 @@ import fs from "node:fs";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,6 +27,25 @@ const {
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
+
+const dataDir = path.join(__dirname, "data");
+fs.mkdirSync(dataDir, { recursive: true });
+const db = new Database(path.join(dataDir, "usage.db"));
+db.exec(`
+  CREATE TABLE IF NOT EXISTS usage_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    neurons REAL
+  )
+`);
+const insertUsage = db.prepare(`
+  INSERT INTO usage_log (created_at, model, prompt_tokens, completion_tokens, total_tokens, neurons)
+  VALUES (@created_at, @model, @prompt_tokens, @completion_tokens, @total_tokens, @neurons)
+`);
 
 // モデル一覧はCloudflare側で頻繁に増減するため、都度取得せず短時間キャッシュする
 let modelsCache = { list: [], fetchedAt: 0 };
@@ -73,6 +93,27 @@ app.get("/api/models", async (req, res) => {
   }
 });
 
+app.get("/api/usage", (req, res) => {
+  // Cloudflareの無料枠リセットはUTC 0時
+  const todayStartUtc = new Date();
+  todayStartUtc.setUTCHours(0, 0, 0, 0);
+
+  const today = db
+    .prepare(`SELECT COALESCE(SUM(neurons), 0) AS neurons, COUNT(*) AS requests FROM usage_log WHERE created_at >= ?`)
+    .get(todayStartUtc.toISOString());
+  const lifetime = db
+    .prepare(`SELECT COALESCE(SUM(neurons), 0) AS neurons, COUNT(*) AS requests FROM usage_log`)
+    .get();
+  const byModel = db
+    .prepare(
+      `SELECT model, COALESCE(SUM(neurons), 0) AS neurons, COUNT(*) AS requests
+       FROM usage_log GROUP BY model ORDER BY neurons DESC LIMIT 20`
+    )
+    .all();
+
+  res.json({ today, lifetime, byModel, freeDailyNeurons: 10000 });
+});
+
 app.post("/api/chat", async (req, res) => {
   if (!CLOUDFLARE_ACCOUNT_ID || !CLOUDFLARE_API_TOKEN) {
     return res.status(500).json({
@@ -114,7 +155,20 @@ app.post("/api/chat", async (req, res) => {
 
     // モデルによって legacy 形式(result.response)とOpenAI互換形式(result.choices[].message.content)が混在する
     const reply = data.result?.response ?? data.result?.choices?.[0]?.message?.content ?? "";
-    res.json({ reply });
+
+    const usage = data.result?.usage;
+    if (usage) {
+      insertUsage.run({
+        created_at: new Date().toISOString(),
+        model: useModel,
+        prompt_tokens: usage.prompt_tokens ?? null,
+        completion_tokens: usage.completion_tokens ?? null,
+        total_tokens: usage.total_tokens ?? null,
+        neurons: usage.neurons ?? null,
+      });
+    }
+
+    res.json({ reply, neurons: usage?.neurons ?? null });
   } catch (err) {
     res.status(502).json({ error: `Cloudflare APIへの接続に失敗しました: ${err.message}` });
   }

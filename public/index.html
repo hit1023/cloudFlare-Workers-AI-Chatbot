@@ -82,6 +82,14 @@
   #model-warning:empty {
     display: none;
   }
+  .usage-label {
+    margin: 4px 0 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .usage-label:empty {
+    display: none;
+  }
   .panel {
     flex: 1;
     background: var(--panel);
@@ -171,6 +179,7 @@
         </select>
       </div>
       <p id="model-warning"></p>
+      <p id="usage-label" class="usage-label"></p>
     </header>
     <div class="panel">
       <div id="log"></div>
@@ -189,6 +198,22 @@
   const history = [];
   const modelSelect = document.getElementById("model-select");
   const modelWarning = document.getElementById("model-warning");
+  const usageLabel = document.getElementById("usage-label");
+
+  async function refreshUsage() {
+    try {
+      const res = await fetch("/api/usage");
+      if (!res.ok) return;
+      const data = await res.json();
+      const today = data.today.neurons.toFixed(1);
+      usageLabel.textContent =
+        `本日のNeurons消費: ${today} / ${data.freeDailyNeurons}（累計 ${data.lifetime.neurons.toFixed(1)} neurons, ${data.lifetime.requests}回）`;
+    } catch {
+      // 使用量表示はおまけ機能なので、失敗しても黙って諦める
+    }
+  }
+
+  refreshUsage();
 
   async function loadModels() {
     try {
@@ -259,6 +284,7 @@
       } else {
         pending.textContent = data.reply;
         history.push({ role: "assistant", content: data.reply });
+        refreshUsage();
       }
     } catch (err) {
       pending.remove();

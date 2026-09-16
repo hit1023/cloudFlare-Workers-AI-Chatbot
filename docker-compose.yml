@@ -6,4 +6,5 @@ services:
       - "3300:3000"
     volumes:
       - ./app.env:/app/app.env:ro
+      - ./data:/app/data
     restart: unless-stopped

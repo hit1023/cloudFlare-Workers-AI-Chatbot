@@ -9,7 +9,9 @@ Cloudflare Workers AI を使ったチャットボットのサンプル。Node.js
 - `server.js` : Express サーバー
   - `GET /api/models` : Cloudflare側の「Text Generation」モデル一覧を取得（10分キャッシュ）
   - `POST /api/chat` : 選択されたモデルで `/accounts/{account_id}/ai/run/{model}` を呼び出し、会話履歴を渡して応答を返す
-- `public/index.html` : チャットUI（バニラJS、ライト/ダーク対応、モデル切り替えドロップダウン付き）
+  - `GET /api/usage` : 消費Neuronsの集計（本日分・累計・モデル別）を返す
+- `public/index.html` : チャットUI（バニラJS、ライト/ダーク対応、モデル切り替えドロップダウン、Neurons消費表示付き）
+- `data/usage.db` : SQLite（better-sqlite3）。チャット応答のたびにCloudflareが返す `usage.neurons` をリクエスト単位で記録する。Dockerボリュームでホスト側 `./data/` に永続化
 - Workers AI 自体はローカル実行ではなく、Cloudflare 側の推論エンドポイントを都度呼び出す方式（**インターネット接続必須**、モデルのダウンロードや自前GPUは不要）
 
 ## 必要なもの
@@ -95,6 +97,21 @@ Workers AI は **Neurons** という単位で従量課金される（[公式料�
 参考: `@cf/meta/llama-3.1-8b-instruct` の場合、入力 25,608 neurons/100万トークン、出力 75,147 neurons/100万トークン。仮に1往復あたり入力100トークン・出力200トークン程度の雑談だとすると、1メッセージ当たり約18 neurons ほど。**無料枠の10,000 neurons/日だけで1日500往復以上**試せる計算になり、個人の検証・プロトタイプ用途では実質無料で使い切れないレベル。
 
 ただし、大きめのモデル（70Bクラスなど）は出力側の消費量が数倍になり、Kimi・GLM・DeepSeekなど一部の先端モデルは無料枠の対象外でPaidプラン必須の場合がある。正確な数値・最新情報は必ず[公式ページ](https://developers.cloudflare.com/workers-ai/platform/pricing/)で確認すること（料金体系は変更される可能性がある）。
+
+### 消費量の記録・確認
+
+チャット1往復ごとにCloudflareのレスポンスに含まれる実測Neurons数を `data/usage.db`（SQLite）へ記録している。UIのヘッダーに本日分（UTC基準、無料枠のリセットに合わせている）と累計が表示される。
+
+直接クエリしたい場合:
+
+```bash
+docker compose exec chatbot node -e "
+const db = require('better-sqlite3')('/app/data/usage.db');
+console.log(db.prepare('SELECT * FROM usage_log ORDER BY id DESC LIMIT 20').all());
+"
+```
+
+または `GET /api/usage` で `{ today, lifetime, byModel }` をJSONで取得できる。
 
 ## 今後の展望
 
