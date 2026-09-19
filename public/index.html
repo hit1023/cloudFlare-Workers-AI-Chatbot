@@ -179,6 +179,7 @@
         </select>
       </div>
       <p id="model-warning"></p>
+      <p id="gateway-label" class="usage-label"></p>
       <p id="usage-label" class="usage-label"></p>
     </header>
     <div class="panel">
@@ -207,7 +208,7 @@
       const data = await res.json();
       const today = data.today.neurons.toFixed(1);
       usageLabel.textContent =
-        `本日のNeurons消費: ${today} / ${data.freeDailyNeurons}（累計 ${data.lifetime.neurons.toFixed(1)} neurons, ${data.lifetime.requests}回）`;
+        `このアプリの記録済みNeurons（請求額・無料枠残高ではありません）: ${today} / ${data.freeDailyNeurons}（累計 ${data.lifetime.neurons.toFixed(1)} neurons, ${data.lifetime.requests}回）`;
     } catch {
       // 使用量表示はおまけ機能なので、失敗しても黙って諦める
     }
@@ -219,6 +220,7 @@
     try {
       const cfgRes = await fetch("/api/config");
       const cfg = await cfgRes.json();
+      document.getElementById("gateway-label").textContent = `AI Gateway: ${cfg.gateway || "未設定"}`;
       if (!cfg.configured) {
         modelWarning.textContent = "CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN が未設定です。app.envを確認してください。";
         modelSelect.innerHTML = "<option>" + cfg.model + "</option>";
@@ -261,7 +263,7 @@
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = input.value.trim();
-    if (!text) return;
+    if (!text || sendBtn.disabled) return;
 
     addBubble("user", text);
     history.push({ role: "user", content: text });

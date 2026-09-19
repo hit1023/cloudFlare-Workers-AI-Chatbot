@@ -18,12 +18,21 @@ if (fs.existsSync(envPath)) {
 const {
   CLOUDFLARE_ACCOUNT_ID,
   CLOUDFLARE_API_TOKEN,
-  MODEL = "@cf/meta/llama-3.1-8b-instruct",
+  AI_GATEWAY_ID,
+  MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8",
   SYSTEM_PROMPT = "あなたは親切で簡潔に答えるアシスタントです。",
   MAX_TOKENS = "1024",
   PORT = 3000,
 } = process.env;
 
+if (!AI_GATEWAY_ID || !/^[a-z0-9_]+(?:-[a-z0-9_]+)*$/.test(AI_GATEWAY_ID)) {
+  throw new Error("AI_GATEWAY_ID を設定してください。直接 API への接続は無効です。");
+}
+const maxOutputTokens = Number(MAX_TOKENS);
+if (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > 2048) {
+  throw new Error("MAX_TOKENS は 1〜2048 の整数にしてください。");
+}
+let chatInFlight = false;
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
@@ -78,7 +87,7 @@ async function fetchTextGenerationModels() {
 }
 
 app.get("/api/config", (req, res) => {
-  res.json({ model: MODEL, configured: Boolean(CLOUDFLARE_ACCOUNT_ID && CLOUDFLARE_API_TOKEN) });
+  res.json({ model: MODEL, gateway: AI_GATEWAY_ID, configured: Boolean(CLOUDFLARE_ACCOUNT_ID && CLOUDFLARE_API_TOKEN && AI_GATEWAY_ID) });
 });
 
 app.get("/api/models", async (req, res) => {
@@ -122,13 +131,21 @@ app.post("/api/chat", async (req, res) => {
     });
   }
 
-  const { messages, model } = req.body;
+  const { messages, model } = req.body || {};
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: "messages が空です。" });
   }
 
+  if (messages.length > 40 || messages.some((m) => !m || !["user", "assistant"].includes(m.role) || typeof m.content !== "string") ||
+      messages.reduce((n, m) => n + m.content.length, 0) > 16000) {
+    return res.status(400).json({ error: "会話は40件・合計16,000文字以内にしてください。新しい会話を開始してください。" });
+  }
+  if (chatInFlight) {
+    return res.status(429).json({ error: "別の応答を生成中です。完了後に送信してください。" });
+  }
   const useModel = typeof model === "string" && model.startsWith("@cf/") ? model : MODEL;
-  const url = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/run/${useModel}`;
+  const url = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/run`;
+  chatInFlight = true;
 
   try {
     const cfRes = await fetch(url, {
@@ -136,13 +153,21 @@ app.post("/api/chat", async (req, res) => {
       headers: {
         Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}`,
         "Content-Type": "application/json",
+        "cf-aig-gateway-id": AI_GATEWAY_ID,
       },
       body: JSON.stringify({
-        messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
-        max_tokens: Number(MAX_TOKENS),
+        model: useModel,
+        input: {
+          messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages.map(({ role, content }) => ({ role, content }))],
+          max_tokens: maxOutputTokens,
+        },
       }),
     });
 
+    if (cfRes.status === 429) {
+      await cfRes.body?.cancel();
+      return res.status(429).json({ error: "AI Gateway または Workers AI の利用上限に達しました。予算・回数制限を確認し、解除後に再度お試しください。" });
+    }
     const data = await cfRes.json();
 
     if (!cfRes.ok || data.success === false) {
@@ -150,7 +175,7 @@ app.post("/api/chat", async (req, res) => {
       const message = detail.includes("Workers Free plan")
         ? `${useModel} はWorkers Paidプラン限定のモデルです。Freeプランでは利用できません。`
         : `Workers AI エラー: ${detail}`;
-      return res.status(cfRes.status || 502).json({ error: message });
+      return res.status(cfRes.ok ? 502 : cfRes.status).json({ error: message });
     }
 
     // モデルによって legacy 形式(result.response)とOpenAI互換形式(result.choices[].message.content)が混在する
@@ -171,6 +196,8 @@ app.post("/api/chat", async (req, res) => {
     res.json({ reply, neurons: usage?.neurons ?? null });
   } catch (err) {
     res.status(502).json({ error: `Cloudflare APIへの接続に失敗しました: ${err.message}` });
+  } finally {
+    chatInFlight = false;
   }
 });
 

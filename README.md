@@ -1,6 +1,6 @@
 # cloudFlare-Workers-AI-Chatbot
 
-Cloudflare Workers AI を使ったチャットボットのサンプル。Node.js + Express の薄いバックエンドが Cloudflare Workers AI の REST API を呼び出し、フロントは単一HTMLのチャットUI。Docker（Docker Compose）でどこでもすぐ動く。
+Cloudflare Workers AI を使ったチャットボットのサンプル。Node.js + Express の薄いバックエンドが AI Gateway 経由で Cloudflare Workers AI の REST API を呼び出し、フロントは単一HTMLのチャットUI。Docker（Docker Compose）でどこでもすぐ動く。
 
 将来的に [Drift](https://drift.s-quad.com/) アプリへ組み込む前段のプロトタイプ。
 
@@ -8,7 +8,7 @@ Cloudflare Workers AI を使ったチャットボットのサンプル。Node.js
 
 - `server.js` : Express サーバー
   - `GET /api/models` : Cloudflare側の「Text Generation」モデル一覧を取得（10分キャッシュ）
-  - `POST /api/chat` : 選択されたモデルで `/accounts/{account_id}/ai/run/{model}` を呼び出し、会話履歴を渡して応答を返す
+  - `POST /api/chat` : 選択されたモデルで `/accounts/{account_id}/ai/run`（`cf-aig-gateway-id` 必須） を呼び出し、会話履歴を渡して応答を返す
   - `GET /api/usage` : 消費Neuronsの集計（本日分・累計・モデル別）を返す
 - `public/index.html` : チャットUI（バニラJS、ライト/ダーク対応、モデル切り替えドロップダウン、Neurons消費表示付き）
 - `data/usage.db` : SQLite（better-sqlite3）。チャット応答のたびにCloudflareが返す `usage.neurons` をリクエスト単位で記録する。Dockerボリュームでホスト側 `./data/` に永続化
@@ -17,7 +17,7 @@ Cloudflare Workers AI を使ったチャットボットのサンプル。Node.js
 ## 必要なもの
 
 - Docker / Docker Compose
-- Cloudflareアカウント（無料アカウントでOK。詳細は[料金](#料金ほぼ無料で試せる)を参照）
+- Cloudflareアカウント（無料アカウントでOK。詳細は[料金](#料金)を参照）
 
 ## 1. Cloudflare Account ID と API Token を取得する
 
@@ -56,7 +56,8 @@ cp app.env.example app.env
 ```bash
 CLOUDFLARE_ACCOUNT_ID=your-account-id
 CLOUDFLARE_API_TOKEN=your-api-token
-MODEL=@cf/meta/llama-3.1-8b-instruct   # UIのデフォルト選択モデル
+AI_GATEWAY_ID=hit-workers-ai-chatbot
+MODEL=@cf/meta/llama-3.1-8b-instruct-fp8   # UIのデフォルト選択モデル
 SYSTEM_PROMPT=あなたは親切で簡潔に答えるアシスタントです。
 MAX_TOKENS=1024   # 応答の最大トークン数。Cloudflare側のデフォルト(256)だと長い応答が途中で切れるため明示的に指定
 ```
@@ -85,7 +86,7 @@ docker compose logs -f
 docker compose down
 ```
 
-## 料金（ほぼ無料で試せる）
+## 料金
 
 Workers AI は **Neurons** という単位で従量課金される（[公式料金ページ](https://developers.cloudflare.com/workers-ai/platform/pricing/)）。
 
@@ -94,9 +95,7 @@ Workers AI は **Neurons** という単位で従量課金される（[公式料�
 | Workers Free | **10,000 Neurons / 日**（UTC 0時リセット） | 課金不可（Paidへのアップグレードが必要） |
 | Workers Paid（月$5〜） | 10,000 Neurons / 日 | $0.011 / 1,000 Neurons |
 
-参考: `@cf/meta/llama-3.1-8b-instruct` の場合、入力 25,608 neurons/100万トークン、出力 75,147 neurons/100万トークン。仮に1往復あたり入力100トークン・出力200トークン程度の雑談だとすると、1メッセージ当たり約18 neurons ほど。**無料枠の10,000 neurons/日だけで1日500往復以上**試せる計算になり、個人の検証・プロトタイプ用途では実質無料で使い切れないレベル。
-
-ただし、大きめのモデル（70Bクラスなど）は出力側の消費量が数倍になり、Kimi・GLM・DeepSeekなど一部の先端モデルは無料枠の対象外でPaidプラン必須の場合がある。正確な数値・最新情報は必ず[公式ページ](https://developers.cloudflare.com/workers-ai/platform/pricing/)で確認すること（料金体系は変更される可能性がある）。
+モデルや入力・出力の長さによって消費量が変わります。無料枠だけで利用できる回数は一定ではありません。最新の料金とモデルごとの利用条件は[公式料金ページ](https://developers.cloudflare.com/workers-ai/platform/pricing/)を確認してください。
 
 ### 消費量の記録・確認
 
@@ -117,3 +116,36 @@ console.log(db.prepare('SELECT * FROM usage_log ORDER BY id DESC LIMIT 20').all(
 
 - [Drift](https://drift.s-quad.com/) アプリへの組み込み（FastAPI側からWorkers AIを呼ぶか、Cloudflare Worker自体として書き直すかは検討中）
 - ストリーミング応答（現状は非ストリーミング）
+
+## AI Gateway による利用制限
+
+このアプリは `AI_GATEWAY_ID` が未設定なら起動しません。推論は Universal REST API に `cf-aig-gateway-id` を付けて送信します。モデル一覧の取得は推論ではないため通常の管理 API を利用します。
+
+2026-09-19 の専用 Gateway `hit-workers-ai-chatbot` 設定:
+
+- Spend limits: 全モデル共通で $10 / 直近30日（スライディングウィンドウ）。暦月ごとのリセットではありません。
+- レート制限: 毎分10リクエスト（固定ウィンドウ）。
+- Workers AI 課金: 標準課金（postpaid）。既存の Workers 契約で請求。
+- Gateway 認証: 有効。会話本文のログ収集・キャッシュ・自動リトライ: 無効。
+
+予算は Cloudflare ダッシュボードの AI Gateway → 対象 Gateway → 設定で管理します。Gateway の推定費用と、無料枠控除後の請求額は同一とは限りません。処理完了後に費用を計上するため、一時的な超過の可能性があります。既存の Workers 基本料金や他の Gateway・直接呼び出しはこの制限の対象外です。
+
+アプリ側は同時推論1件、会話40メッセージ・合計16,000文字、出力上限 `MAX_TOKENS`（既定1024、設定可能範囲1〜2048）に制限します。上限に達した会話はページを再読込して新しく開始してください。429や接続失敗時に直接 API へ迂回したり自動リトライしたりしません。Neurons表示はアプリが記録できた値で、請求額やアカウント全体の無料枠残量を示しません。
+
+テスト: `node --test test/gateway.test.cjs`
+
+公式仕様: https://developers.cloudflare.com/ai-gateway/features/spend-limits/
+
+## 変更履歴
+
+### 2026-09-19 — AI Gateway 経由への移行と利用制限
+
+- Workers AI の直接呼び出しを、専用 Gateway `hit-workers-ai-chatbot` 経由の Universal REST API に変更。`AI_GATEWAY_ID` を必須化し、未設定時は起動を停止。
+- Cloudflare 側に、全モデル合計で直近30日間 $10 の予算制限と毎分10リクエストの回数制限を設定。これらはクラウド側の設定であり、リポジトリの取得・起動だけでは自動作成されない。
+- アプリ側に同時生成1件、会話40件・合計16,000文字、出力上限の検証を追加。上限エラー時に直接 API へ迂回・自動再試行しない。
+- 廃止された既定モデルを、利用可能な `@cf/meta/llama-3.1-8b-instruct-fp8` に変更。
+- 画面に Gateway 名を表示し、Neurons 表示が請求額・無料枠残量ではないことを明記。送信中の重複送信を抑止。
+- Gateway 必須、送信先・ヘッダー、429時の停止、入力制限、同時実行制限を検証するテスト5件を追加。
+- Docker コンテナを再ビルドして反映。実際のチャット応答と Gateway 側の受信実績を確認。
+
+予算は推定利用額に対して適用され、処理中リクエストによる超過の可能性がある。既存の Workers 基本料金・他アプリの利用料金は別。
